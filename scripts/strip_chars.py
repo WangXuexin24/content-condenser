@@ -4,6 +4,9 @@
 LLMs understand text with missing characters (Ths cmprssd txt wrks fne).
 This strips redundant characters while preserving critical tokens.
 
+Note: Savings are measured in characters. Token-level savings depend on
+content and tokenizer; common short words may compress less than rare ones.
+
 Usage:
   python3 strip_chars.py file.txt -l 2
   cat log.txt | python3 strip_chars.py -l 3 -s
@@ -22,7 +25,7 @@ Use --preserve to protect additional words (case-insensitive).
 import argparse
 import re
 import sys
-from typing import List, Set, Tuple
+from typing import List, Tuple
 
 
 # --- Preservation patterns ---
@@ -79,9 +82,13 @@ def _protect_code_blocks(text: str) -> Tuple[str, List[Tuple[str, str]]]:
 
 # --- Markdown protections ---
 
-def _protect_markdown(text: str) -> Tuple[str, Set[str]]:
-    """Extract markdown markers to protect."""
-    markers: Set[str] = set()
+def _protect_markdown(text: str) -> Tuple[str, set[str]]:
+    """Extract markdown markers to protect.
+
+    Currently protects: heading # prefixes, horizontal rules.
+    Does NOT protect: links, bold/italic markers, tables, blockquotes.
+    """
+    markers: set[str] = set()
     for m in re.finditer(r'^(#{1,6})\s+', text, re.MULTILINE):
         markers.add(m.group(1))
     for m in re.finditer(r'^(-{3,}|_{3,}|\*{3,})$', text, re.MULTILINE):
@@ -91,7 +98,7 @@ def _protect_markdown(text: str) -> Tuple[str, Set[str]]:
 
 # --- Level 1: Remove doubled letters ---
 
-def _level1(word: str, preserve: Set[str]) -> str:
+def _level1(word: str, preserve: set[str]) -> str:
     if not _is_latin(word) or len(word) <= 3:
         return word
     if word.lower() in preserve:
@@ -115,7 +122,7 @@ def _is_latin(word: str) -> bool:
     return bool(_LATIN_WORD.match(word))
 
 
-def _level2(word: str, preserve: Set[str]) -> str:
+def _level2(word: str, preserve: set[str]) -> str:
     if not _is_latin(word) or len(word) <= 3:
         return word
     if word.lower() in preserve:
@@ -131,7 +138,7 @@ def _level2(word: str, preserve: Set[str]) -> str:
 
 # --- Level 3: Truncate long words ---
 
-def _level3(word: str, preserve: Set[str]) -> str:
+def _level3(word: str, preserve: set[str]) -> str:
     if not _is_latin(word) or len(word) <= 6:
         return word
     if word.lower() in preserve:
@@ -175,7 +182,7 @@ def _level4(text: str) -> str:
 
 # --- Main compression ---
 
-def compress_word(word: str, level: int, preserve: Set[str]) -> str:
+def compress_word(word: str, level: int, preserve: set[str]) -> str:
     """Apply compression levels to a single word."""
     if level >= 1:
         word = _level1(word, preserve)
@@ -190,7 +197,7 @@ def compress(
     text: str,
     level: int = 2,
     markdown: bool = False,
-    preserve_words: Set[str] = None,
+    preserve_words: set[str] = None,
 ) -> Tuple[str, dict]:
     """Compress text at given level.
 
@@ -266,7 +273,7 @@ def main():
     )
     parser.add_argument(
         "-m", "--markdown", action="store_true",
-        help="Markdown-safe: preserve headings, lists, links"
+        help="Preserve # headings and --- rules (does NOT protect links, bold, tables)"
     )
     parser.add_argument(
         "-p", "--preserve", nargs="*", default=[],
@@ -274,7 +281,7 @@ def main():
     )
     parser.add_argument(
         "-s", "--stats", action="store_true",
-        help="Show compression statistics on stderr"
+        help="Show character-level compression statistics on stderr"
     )
     args = parser.parse_args()
 
