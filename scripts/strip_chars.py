@@ -4,13 +4,13 @@
 LLMs understand text with missing characters (Ths cmprssd txt wrks fne).
 This strips redundant characters while preserving critical tokens.
 
-Note: Savings are measured in characters. Token-level savings depend on
-content and tokenizer; common short words may compress less than rare ones.
+Note: Savings are measured in characters. Token-level stats use heuristic
+estimation (~4 chars/tok Latin, ~1.5 chars/tok CJK). Install tiktoken for exact counts.
 
 Usage:
   python3 strip_chars.py file.txt -l 2
   cat log.txt | python3 strip_chars.py -l 3 -s
-  python3 strip_chars.py file.txt -m   # markdown-safe mode
+  python3 strip_chars.py file.txt -m -d   # markdown-safe + diff view
 
 Levels:
   1 = Light: remove doubled letters                  (~1-2% savings)
@@ -19,13 +19,13 @@ Levels:
   4 = Maximum: + filler removal + dedup              (~15-20% savings)
 
 Auto-preserved: URLs, emails, UUIDs, code blocks (``` fences), phone numbers.
+CJK/Non-Latin: automatically skipped at word level.
 Use --preserve to protect additional words (case-insensitive).
 """
 
 import argparse
 import re
 import sys
-from typing import List, Tuple
 
 
 # --- Preservation patterns ---
@@ -40,9 +40,9 @@ PROTECTED = re.compile(
 )
 
 
-def _protect_spans(text: str) -> Tuple[str, List[Tuple[str, str]]]:
-    """Replace protected spans with placeholders."""
-    spans: List[Tuple[str, str]] = []
+def _protect_spans(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Replace protected spans with placeholders, return text + mapping."""
+    spans = []
     idx = 0
 
     def _replacer(m):
@@ -56,7 +56,7 @@ def _protect_spans(text: str) -> Tuple[str, List[Tuple[str, str]]]:
     return text, spans
 
 
-def _restore_spans(text: str, spans: List[Tuple[str, str]]) -> str:
+def _restore_spans(text: str, spans: list[tuple[str, str]]) -> str:
     for key, original in spans:
         text = text.replace(key, original)
     return text
@@ -64,9 +64,9 @@ def _restore_spans(text: str, spans: List[Tuple[str, str]]) -> str:
 
 # --- Code block protection ---
 
-def _protect_code_blocks(text: str) -> Tuple[str, List[Tuple[str, str]]]:
-    """Protect fenced code blocks from compression."""
-    blocks: List[Tuple[str, str]] = []
+def _protect_code_blocks(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Protect ``` fenced code blocks from compression."""
+    blocks = []
     idx = 0
 
     def _replacer(m):
@@ -80,15 +80,15 @@ def _protect_code_blocks(text: str) -> Tuple[str, List[Tuple[str, str]]]:
     return text, blocks
 
 
-# --- Markdown protections ---
+# --- Text protections ---
 
-def _protect_markdown(text: str) -> Tuple[str, set[str]]:
+def _protect_markdown(text: str) -> tuple[str, set[str]]:
     """Extract markdown markers to protect.
 
     Currently protects: heading # prefixes, horizontal rules.
     Does NOT protect: links, bold/italic markers, tables, blockquotes.
     """
-    markers: set[str] = set()
+    markers = set()
     for m in re.finditer(r'^(#{1,6})\s+', text, re.MULTILINE):
         markers.add(m.group(1))
     for m in re.finditer(r'^(-{3,}|_{3,}|\*{3,})$', text, re.MULTILINE):
@@ -116,7 +116,6 @@ VOWELS = set("aeiouAEIOU")
 
 # Only compress Latin-alphabet words; CJK and other scripts pass through unharmed
 _LATIN_WORD = re.compile(r'^[a-zA-Z]+$')
-
 
 def _is_latin(word: str) -> bool:
     return bool(_LATIN_WORD.match(word))
@@ -148,7 +147,7 @@ def _level3(word: str, preserve: set[str]) -> str:
     return word[:keep_front] + word[-keep_back:]
 
 
-# --- Level 4: Filler phrases + dedup (English + Chinese) ---
+# --- Common filler phrases (Level 4) ---
 
 FILLER_RE = re.compile(
     r'\b(?:note that|it should be noted|interestingly|importantly|'
@@ -168,7 +167,7 @@ FILLER_ZH = re.compile(
 
 
 def _level4(text: str) -> str:
-    """Remove filler phrases and deduplicate consecutive identical lines."""
+    """Remove filler phrases and deduplicate lines."""
     text = FILLER_RE.sub("", text)
     text = FILLER_ZH.sub("", text)
     lines = text.split("\n")
@@ -182,27 +181,13 @@ def _level4(text: str) -> str:
 
 # --- Main compression ---
 
-def compress_word(word: str, level: int, preserve: set[str]) -> str:
-    """Apply compression levels to a single word."""
-    if level >= 1:
-        word = _level1(word, preserve)
-    if level >= 2:
-        word = _level2(word, preserve)
-    if level >= 3:
-        word = _level3(word, preserve)
-    return word
-
-
 def compress(
     text: str,
     level: int = 2,
     markdown: bool = False,
     preserve_words: set[str] = None,
-) -> Tuple[str, dict]:
-    """Compress text at given level.
-
-    Returns (compressed_text, stats_dict).
-    """
+) -> tuple[str, dict]:
+    """Compress text at given level. Returns (compressed_text, stats)."""
     stats = {"original_chars": len(text), "level": level}
     preserve = set(w.lower() for w in (preserve_words or set()))
 
@@ -218,7 +203,6 @@ def compress(
     result_lines = []
 
     for line in lines:
-        # Separate markdown/list markers
         marker_match = re.match(r'^(\s*(?:[-*+]|\d+[.)])\s+)', line)
         if marker_match:
             marker = marker_match.group()
@@ -257,6 +241,35 @@ def compress(
     return text, stats
 
 
+def compress_word(word: str, level: int, preserve: set[str]) -> str:
+    """Apply compression levels to a single word."""
+    if level >= 1:
+        word = _level1(word, preserve)
+    if level >= 2:
+        word = _level2(word, preserve)
+    if level >= 3:
+        word = _level3(word, preserve)
+    return word
+
+
+# --- Token estimation ---
+
+def estimate_tokens(text: str) -> dict:
+    """Rough token estimate without external dependencies.
+
+    Heuristic: ~4 chars/token for Latin text, ~1.5 chars/token for CJK.
+    Install tiktoken for exact counts.
+    """
+    cjk = len(re.findall(r'[\u4e00-\u9fff\u3040-\u309f\uac00-\ud7af]', text))
+    latin = len(text) - cjk
+    return {
+        "estimated_tokens": int(latin / 4 + cjk / 1.5),
+        "cjk_chars": cjk,
+        "latin_chars": latin,
+        "method": "heuristic (~4 chars/tok Latin, ~1.5 chars/tok CJK)",
+    }
+
+
 # --- CLI ---
 
 def main():
@@ -281,7 +294,11 @@ def main():
     )
     parser.add_argument(
         "-s", "--stats", action="store_true",
-        help="Show character-level compression statistics on stderr"
+        help="Show compression statistics (char + estimated tokens) on stderr"
+    )
+    parser.add_argument(
+        "-d", "--diff", action="store_true",
+        help="Show original vs compressed side by side"
     )
     args = parser.parse_args()
 
@@ -298,11 +315,30 @@ def main():
         preserve_words=set(args.preserve),
     )
 
-    print(result)
+    if args.diff:
+        print(f"{'─'*40} ORIGINAL {'─'*40}")
+        print(text.rstrip())
+        print(f"\n{'─'*40} COMPRESSED (-{stats['savings_pct']}%) {'─'*40}")
+        print(result)
+    else:
+        print(result)
     if args.stats:
+        tok_orig = estimate_tokens(text)
+        tok_comp = estimate_tokens(result)
         print(
             f"Chars: {stats['original_chars']} -> {stats['compressed_chars']} "
             f"(-{stats['savings_pct']}%)",
+            file=sys.stderr,
+        )
+        print(
+            f"Tokens (est): {tok_orig['estimated_tokens']} -> "
+            f"{tok_comp['estimated_tokens']} "
+            f"(-{round((1 - tok_comp['estimated_tokens'] / max(1, tok_orig['estimated_tokens'])) * 100, 1)}%)",
+            file=sys.stderr,
+        )
+        print(
+            f"Note: heuristic estimate ({tok_orig['method']}). "
+            f"Install tiktoken for exact counts.",
             file=sys.stderr,
         )
 
