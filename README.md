@@ -1,16 +1,18 @@
 # Content Condenser
 
-**Three-tier content compression for AI context windows.** Save tokens on logs, documents, and agent communication — without losing critical information.
+**Three-tier content compression for reducing text length in AI context windows.** Characters saved, token savings may vary.
 
-```python
-# L1: Mechanical character compression — zero AI cost
+```bash
+# L1: Mechanical character compression — zero AI cost, zero dependencies
 $ cat build_log.txt | python3 scripts/strip_chars.py -l 2 -s
 Chars: 516 -> 469 (-9.1%)
 ```
 
+⚠️ **Important**: Savings are measured in *characters*. Token-level savings depend on your content and tokenizer. Common short words (single BPE tokens) may compress less than rare/multi-token words. For exact token counts, install `tiktoken` and combine with `--stats`.
+
 ## The Core Insight
 
-Most tokens fed to LLMs carry **low information density**. Common patterns:
+Most text fed to LLMs carries **low information density**. Common patterns:
 
 | Source | Waste | Cause |
 |--------|-------|-------|
@@ -29,16 +31,17 @@ This project provides three tiers of compression, each targeting a different kin
 
 **Script:** `scripts/strip_chars.py` — zero dependencies, pure Python 3.
 
-LLMs understand text with missing characters. Removing vowels, doubled letters, and truncating long words cuts token count without losing meaning.
+LLMs understand text with missing characters. Removing vowels, doubled letters, and truncating long words reduces text length without losing meaning.
 
-| Level | Operation | Savings | Readability |
-|-------|-----------|---------|-------------|
+| Level | Operation | Char savings | Readability |
+|-------|-----------|:---------:|-------------|
 | 1 | Remove doubled letters (letter→leter) | ~1-2% | Perfect |
 | 2 | + Remove interior vowels (letter→ltr) | ~10-16% | Legible |
 | 3 | + Truncate long words (understanding→undrsg) | ~13-17% | Tough |
 | 4 | + Remove filler phrases + dedup lines | ~15-20% | Rough |
 
 **Auto-preserved:** URLs, emails, UUIDs, code blocks, phone numbers.
+**CJK/Non-Latin:** Automatically skipped — Chinese, Japanese, Korean text passes through untouched.
 
 ```bash
 # Quick usage
@@ -70,7 +73,7 @@ Before (286 chars):
 关于这个项目的最新进展情况，我想向大家做一个比较详细的汇报。
 首先需要指出的是，我们团队在过去的两周时间里...
 
-After (68 chars):
+After (68 chars, 76% char reduction):
 项目进度:
 - 核心功能: done (dev+test)
 - 性能: DB查询 高并发 响应波动 → P0
@@ -129,6 +132,15 @@ Input type?
 
 ---
 
+## Limitations
+
+- **Character vs token**: This tool measures character savings. BPE tokenizers (used by GPT, Claude, etc.) may not compress proportional to characters. Common short words may use *more* tokens when compressed. For exact token counts, use with `tiktoken`.
+- **Markdown mode**: `--markdown` currently protects only heading `#` prefixes and horizontal rules. Links, bold/italic markers, and tables are not protected yet.
+- **L2/L3 validation**: Semantic and extreme compression modes rely on AI judgment. There is no automatic information-retention verification (planned for v2).
+- **Chinese/Japanese/Korean**: L1-L3 compression is a no-op for CJK text at the word level. Chinese filler phrases are covered by L4's filler removal.
+
+---
+
 ## ⚠️ Vibe Coding Warning
 
 This project was created by an AI assistant as part of a rapid prototyping session. Key context:
@@ -143,6 +155,7 @@ This project was created by an AI assistant as part of a rapid prototyping sessi
 - A proper test suite
 - Integration examples for Claude Code, Copilot, or Cursor
 - Performance benchmarks on real workloads
+- Information retention validation (decompress-and-compare)
 
 ---
 
