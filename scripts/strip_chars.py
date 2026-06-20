@@ -77,10 +77,24 @@ def _protect_code_blocks(text: str) -> Tuple[str, List[Tuple[str, str]]]:
     return text, blocks
 
 
+# --- Markdown protections ---
+
+def _protect_markdown(text: str) -> Tuple[str, Set[str]]:
+    """Extract markdown markers to protect."""
+    markers: Set[str] = set()
+    for m in re.finditer(r'^(#{1,6})\s+', text, re.MULTILINE):
+        markers.add(m.group(1))
+    for m in re.finditer(r'^(-{3,}|_{3,}|\*{3,})$', text, re.MULTILINE):
+        markers.add(m.group())
+    return text, markers
+
+
 # --- Level 1: Remove doubled letters ---
 
-def _level1(word: str) -> str:
-    if len(word) <= 3 or not word.isalpha():
+def _level1(word: str, preserve: Set[str]) -> str:
+    if not _is_latin(word) or len(word) <= 3:
+        return word
+    if word.lower() in preserve:
         return word
     result = [word[0]]
     for i in range(1, len(word)):
@@ -93,9 +107,18 @@ def _level1(word: str) -> str:
 
 VOWELS = set("aeiouAEIOU")
 
+# Only compress Latin-alphabet words; CJK and other scripts pass through unharmed
+_LATIN_WORD = re.compile(r'^[a-zA-Z]+$')
 
-def _level2(word: str) -> str:
-    if len(word) <= 3 or not word.isalpha():
+
+def _is_latin(word: str) -> bool:
+    return bool(_LATIN_WORD.match(word))
+
+
+def _level2(word: str, preserve: Set[str]) -> str:
+    if not _is_latin(word) or len(word) <= 3:
+        return word
+    if word.lower() in preserve:
         return word
     if len(word) <= 4:
         return word
@@ -108,8 +131,10 @@ def _level2(word: str) -> str:
 
 # --- Level 3: Truncate long words ---
 
-def _level3(word: str) -> str:
-    if len(word) <= 6 or not word.isalpha():
+def _level3(word: str, preserve: Set[str]) -> str:
+    if not _is_latin(word) or len(word) <= 6:
+        return word
+    if word.lower() in preserve:
         return word
     keep_front = min(4, len(word) // 3 + 2)
     keep_back = min(2, max(1, len(word) // 5))
@@ -150,14 +175,14 @@ def _level4(text: str) -> str:
 
 # --- Main compression ---
 
-def compress_word(word: str, level: int) -> str:
+def compress_word(word: str, level: int, preserve: Set[str]) -> str:
     """Apply compression levels to a single word."""
     if level >= 1:
-        word = _level1(word)
+        word = _level1(word, preserve)
     if level >= 2:
-        word = _level2(word)
+        word = _level2(word, preserve)
     if level >= 3:
-        word = _level3(word)
+        word = _level3(word, preserve)
     return word
 
 
@@ -178,6 +203,10 @@ def compress(
     text, code_blocks = _protect_code_blocks(text)
     text, spans = _protect_spans(text)
 
+    if markdown:
+        text, md_markers = _protect_markdown(text)
+        preserve.update(w.lower() for w in md_markers)
+
     lines = text.split("\n")
     result_lines = []
 
@@ -196,16 +225,15 @@ def compress(
         for seg in words:
             if seg.isspace() or not seg:
                 compressed_words.append(seg)
-            elif seg.lower().strip(".",) in preserve:
+            elif seg.lower().strip(".,") in preserve:
                 compressed_words.append(seg)
             else:
-                compressed_words.append(compress_word(seg, level))
+                compressed_words.append(compress_word(seg, level, preserve))
 
         result_lines.append(marker + "".join(compressed_words))
 
     text = "\n".join(result_lines)
 
-    # Phase 4: filler removal and dedup
     if level >= 4:
         text = _level4(text)
 

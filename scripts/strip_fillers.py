@@ -7,7 +7,9 @@ Usage: cat doc.txt | python3 strip_fillers.py
 
 import re
 import sys
+from typing import Tuple
 
+# Patterns to strip — add more as needed
 FILLERS_ZH = [
     r'值得注意的是[,，]?\s*',
     r'需要指出的是[,，]?\s*',
@@ -53,7 +55,7 @@ FILLERS_EN = [
     r'\bWhen (it comes to|all is said and done)\b[,]?\s*',
     r'\bGenerally speaking\b[,]?\s*',
     r'\bBroadly speaking\b[,]?\s*',
-    r'\bFor what it[\'']s worth\b[,]?\s*',
+    r"\bFor what it[']s worth\b[,]?\s*",
     r'\bTo a (certain|large|great|some) extent\b[,]?\s*',
     r'\bIt is (clear|obvious|apparent|evident) that\b\.?\s*',
     r'\bI would (like to|argue that|suggest that)\b\.?\s*',
@@ -62,15 +64,20 @@ FILLERS_EN = [
 
 
 def compress(text: str) -> Tuple[str, int]:
+    """Strip fillers, return (compressed_text, removed_count)."""
     removed = 0
     for pattern in FILLERS_ZH + FILLERS_EN:
         count_before = len(re.findall(pattern, text, flags=re.IGNORECASE))
         text = re.sub(pattern, '', text, flags=re.IGNORECASE)
         removed += count_before
 
+    # Collapse 3+ blank lines → 2
     text = re.sub(r'\n{3,}', '\n\n', text)
+    # Strip trailing whitespace per line
     text = re.sub(r'[ \t]+$', '', text, flags=re.MULTILINE)
+    # Collapse 3+ spaces
     text = re.sub(r' {3,}', '  ', text)
+
     return text.strip(), removed
 
 
